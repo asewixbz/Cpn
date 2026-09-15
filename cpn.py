@@ -52,7 +52,12 @@ def _require_root() -> None:
 
 
 def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]:
-    try: return subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=check)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20, check=False)
+        if check and result.returncode != 0:
+            detail = (result.stderr or result.stdout or "без подробностей").strip()
+            raise CpnError(f"Команда {' '.join(cmd)} завершилась с кодом {result.returncode}: {detail}")
+        return result
     except (OSError, subprocess.SubprocessError) as e: raise CpnError(f"Не удалось выполнить {' '.join(cmd)}: {e}")
 
 
