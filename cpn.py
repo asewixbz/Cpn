@@ -179,7 +179,7 @@ def _outbound_from_json(source: str) -> dict[str, Any]:
 
 def _singbox_config(profile: dict[str, Any]) -> dict[str, Any]:
     outbound = _outbound_from_json(profile["source"]) if profile.get("kind") == "xray-json" else _outbound_from_source(profile["source"])
-    return {"log": {"level": "info"}, "dns": {"servers": [{"tag": "remote", "address": "https://1.1.1.1/dns-query", "detour": "proxy"}]}, "inbounds": [{"type": "tun", "tag": "tun-in", "interface_name": "cpn0", "address": ["172.19.0.1/30"], "auto_route": True, "strict_route": True}], "outbounds": [outbound, {"type": "direct", "tag": "direct"}], "route": {"auto_detect_interface": True, "final": "proxy", "rules": [{"ip_is_private": True, "outbound": "direct"}]}}
+    return {"log": {"level": "info"}, "dns": {"servers": [{"type": "https", "tag": "remote", "server": "1.1.1.1", "path": "/dns-query", "detour": "proxy"}]}, "inbounds": [{"type": "tun", "tag": "tun-in", "interface_name": "cpn0", "address": ["172.19.0.1/30"], "auto_route": True, "strict_route": True}], "outbounds": [outbound, {"type": "direct", "tag": "direct"}], "route": {"auto_detect_interface": True, "final": "proxy", "rules": [{"ip_is_private": True, "outbound": "direct"}]}}
 
 
 def activate_profile(profile: dict[str, Any]) -> None:

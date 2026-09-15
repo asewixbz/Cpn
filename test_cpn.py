@@ -61,6 +61,8 @@ class CpnTests(unittest.TestCase):
         self.assertEqual(config["inbounds"][0]["type"], "tun")
         self.assertTrue(config["inbounds"][0]["auto_route"])
         self.assertEqual(config["route"]["final"], "proxy")
+        self.assertEqual(config["dns"]["servers"][0]["type"], "https")
+        self.assertEqual(config["dns"]["servers"][0]["server"], "1.1.1.1")
 
     def test_xray_json_profile_conversion(self):
         xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000", "encryption": "none"}]}]}, "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "edge.example"}, "wsSettings": {"path": "/api"}}}]}
