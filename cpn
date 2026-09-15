@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -eu
+HERE="$(dirname "$(readlink -f "$0")")"
+if [ -f "$HERE/cpn.py" ]; then
+  exec python3 "$HERE/cpn.py" "$@"
+elif [ -f /usr/local/lib/cpn/cpn.py ]; then
+  exec python3 /usr/local/lib/cpn/cpn.py "$@"
+else
+  echo "cpn: cpn.py не найден" >&2
+  exit 1
+fi
