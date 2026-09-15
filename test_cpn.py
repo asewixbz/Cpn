@@ -73,6 +73,12 @@ class CpnTests(unittest.TestCase):
         self.assertEqual(outbound["transport"]["type"], "ws")
         self.assertEqual(outbound["tls"]["server_name"], "edge.example")
 
+    def test_reality_enables_utls(self):
+        xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000"}]}]}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"publicKey": "key", "shortId": "id"}}}]}
+        profile = cpn.parse_profiles(json.dumps([xray]).encode(), "https://example.com")[0]
+        tls = cpn._singbox_config(profile)["outbounds"][0]["tls"]
+        self.assertEqual(tls["utls"], {"enabled": True, "fingerprint": "chrome"})
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
