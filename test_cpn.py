@@ -74,10 +74,11 @@ class CpnTests(unittest.TestCase):
         self.assertEqual(outbound["tls"]["server_name"], "edge.example")
 
     def test_reality_enables_utls(self):
-        xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000"}]}]}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"publicKey": "key", "shortId": "id"}}}]}
+        xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000"}]}]}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"publicKey": "key", "shortId": "id", "serverName": "cdn.example"}}}]}
         profile = cpn.parse_profiles(json.dumps([xray]).encode(), "https://example.com")[0]
         tls = cpn._singbox_config(profile)["outbounds"][0]["tls"]
         self.assertEqual(tls["utls"], {"enabled": True, "fingerprint": "chrome"})
+        self.assertEqual(tls["server_name"], "cdn.example")
 
 
 if __name__ == "__main__":

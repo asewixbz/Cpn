@@ -127,6 +127,7 @@ def _xray_stream(stream: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]
     if tls.get("serverName"): tls_config["server_name"] = tls["serverName"]
     if security == "reality":
         tls_config["utls"] = {"enabled": True, "fingerprint": "chrome"}
+        if reality.get("serverName"): tls_config["server_name"] = reality["serverName"]
         tls_config["reality"] = {"enabled": True, "public_key": reality.get("publicKey", ""), "short_id": reality.get("shortId", "")}
     transport: dict[str, Any] = {}
     if network == "ws":
