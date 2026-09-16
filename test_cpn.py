@@ -63,6 +63,13 @@ class CpnTests(unittest.TestCase):
         self.assertEqual(config["route"]["final"], "proxy")
         self.assertEqual(config["dns"]["servers"][0]["type"], "https")
         self.assertEqual(config["dns"]["servers"][0]["server"], "1.1.1.1")
+        self.assertEqual(config["inbounds"][0]["strict_route"], True)
+
+    def test_ipv6_ssh_route_uses_128_prefix(self):
+        with patch.dict(cpn.os.environ, {"SSH_CONNECTION": "2001:db8::25 22 2001:db8::1 22"}, clear=True), patch.object(cpn, "_run") as run:
+            run.side_effect = [type("R", (), {"stdout": ""})(), type("R", (), {"stdout": "2001:db8::25 via 2001:db8::1 dev eth0 src 2001:db8::2"})()]
+            route = cpn._ssh_route()
+        self.assertEqual(route["prefix"], "2001:db8::25/128")
 
     def test_xray_json_profile_conversion(self):
         xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000", "encryption": "none"}]}]}, "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "edge.example"}, "wsSettings": {"path": "/api"}}}]}

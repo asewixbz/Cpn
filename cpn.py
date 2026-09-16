@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import base64
 import curses
+import ipaddress
 import json
 import os
 import re
@@ -63,12 +64,15 @@ def _run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess[str]
 
 def _ssh_route() -> dict[str, Any] | None:
     if not ssh_session(): return None
-    peer = os.environ.get("SSH_CLIENT", "").split()[0] or os.environ.get("SSH_CONNECTION", "").split()[0]
+    ssh_client = os.environ.get("SSH_CLIENT", "").split()
+    ssh_connection = os.environ.get("SSH_CONNECTION", "").split()
+    peer = (ssh_client or ssh_connection or [""])[0]
     if not peer: return None
-    current = _run(["ip", "route", "show", "exact", f"{peer}/32"], check=False).stdout.strip()
+    prefix = f"{peer}/128" if ipaddress.ip_address(peer).version == 6 else f"{peer}/32"
+    current = _run(["ip", "route", "show", "exact", prefix], check=False).stdout.strip()
     lookup = _run(["ip", "route", "get", peer], check=False).stdout.strip()
     if not lookup: raise CpnError("Не удалось определить маршрут SSH-клиента; VPN не включён.")
-    parts = lookup.split(); route: dict[str, Any] = {"peer": peer, "previous": current}
+    parts = lookup.split(); route: dict[str, Any] = {"peer": peer, "prefix": prefix, "previous": current}
     if "via" in parts: route["via"] = parts[parts.index("via") + 1]
     if "dev" in parts: route["dev"] = parts[parts.index("dev") + 1]
     if "src" in parts: route["src"] = parts[parts.index("src") + 1]
@@ -78,18 +82,25 @@ def _ssh_route() -> dict[str, Any] | None:
 
 def _preserve_ssh_route(route: dict[str, Any] | None) -> None:
     if not route: return
-    cmd = ["ip", "route", "replace", f"{route['peer']}/32"]
+    cmd = ["ip", "route", "replace", route.get("prefix", f"{route['peer']}/32")]
     if route.get("via"): cmd += ["via", route["via"]]
     cmd += ["dev", route["dev"]]
+    if route.get("src"): cmd += ["src", route["src"]]
     _run(cmd)
     VPN_DIR.mkdir(parents=True, exist_ok=True)
     VPN_ROUTE_BACKUP.write_text(json.dumps(route), encoding="utf-8")
 
 
+def _ssh_route_is_pinned(route: dict[str, Any] | None) -> bool:
+    if not route: return True
+    lookup = _run(["ip", "route", "get", route["peer"]], check=False).stdout.split()
+    return "dev" in lookup and lookup[lookup.index("dev") + 1] == route["dev"]
+
+
 def _restore_ssh_route() -> None:
     if not VPN_ROUTE_BACKUP.exists(): return
     route = json.loads(VPN_ROUTE_BACKUP.read_text(encoding="utf-8")); peer = route["peer"]
-    _run(["ip", "route", "del", f"{peer}/32"], check=False)
+    _run(["ip", "route", "del", route.get("prefix", f"{peer}/32")], check=False)
     if route.get("previous"):
         _run(["ip", "route", "replace"] + shlex.split(route["previous"]), check=False)
     VPN_ROUTE_BACKUP.unlink(missing_ok=True)
@@ -198,6 +209,7 @@ def activate_profile(profile: dict[str, Any]) -> None:
         _run(["systemctl", "daemon-reload"]); _run(["systemctl", "enable", "--now", VPN_SERVICE]); time.sleep(2)
         active = _run(["systemctl", "is-active", VPN_SERVICE], check=False).stdout.strip()
         if active != "active": raise CpnError("sing-box не перешёл в active; выполнен откат SSH-маршрута.")
+        if not _ssh_route_is_pinned(route): raise CpnError("Маршрут до SSH-клиента ушёл в TUN; VPN не активирован безопасно.")
     except CpnError:
         _run(["systemctl", "disable", "--now", VPN_SERVICE], check=False); _restore_ssh_route(); raise
     NETWORK_MUTATIONS_ENABLED = True
@@ -386,6 +398,34 @@ def run_tui(state: dict[str, Any]) -> int:
             stdscr.addstr(10, 2, message[: max(1, curses.COLS - 4)]); stdscr.getch()
         def prompt(message: str) -> str:
             curses.echo(); stdscr.addstr(10, 2, message); value = stdscr.getstr(11, 2, max(1, curses.COLS - 4)).decode("utf-8", "replace"); curses.noecho(); return value.strip()
+        def choose_profile(title: str, activate: bool = False, remove: bool = False) -> None:
+            profiles = state.get("profiles", [])
+            if not profiles: pause("Профили не загружены."); return
+            index = next((i for i, p in enumerate(profiles) if p["id"] == state.get("active_profile")), 0)
+            while True:
+                stdscr.clear(); stdscr.addstr(0, 0, title, curses.A_BOLD)
+                for i, profile in enumerate(profiles):
+                    marker = "> " if i == index else "  "; active = " [активен]" if profile["id"] == state.get("active_profile") else ""
+                    stdscr.addstr(i + 2, 2, f"{marker}{profile['name'][:50]}  ({profile['id']}){active}")
+                stdscr.addstr(len(profiles) + 3, 0, "↑/↓ — выбор, Enter — подтвердить, Esc — назад")
+                key = stdscr.getch()
+                if key == 27: return
+                if key in (curses.KEY_UP, ord("k")): index = (index - 1) % len(profiles)
+                elif key in (curses.KEY_DOWN, ord("j")): index = (index + 1) % len(profiles)
+                elif key in (10, 13):
+                    profile = profiles[index]
+                    try:
+                        if remove:
+                            state["profiles"] = [p for p in state["profiles"] if p["id"] != profile["id"]]
+                            if state.get("active_profile") == profile["id"]: state["active_profile"] = None
+                            save_state(state); pause(f"Профиль удалён: {profile['name']}")
+                        else:
+                            state["active_profile"] = profile["id"]; save_state(state)
+                        if activate:
+                            activate_profile(profile); pause(f"VPN активирован: {profile['name']}")
+                        elif not remove: pause(f"Профиль выбран: {profile['name']}")
+                    except CpnError as error: pause(f"Ошибка: {error}")
+                    return
         while True:
             stdscr.clear(); stdscr.addstr(0, 0, "cpn — управление сетевыми профилями", curses.A_BOLD)
             for i, item in enumerate(menu): stdscr.addstr(i + 2, 2, ("> " if i == selected else "  ") + item)
@@ -410,12 +450,10 @@ def run_tui(state: dict[str, Any]) -> int:
                     except CpnError as e: pause(f"Ошибка: {e}")
                 elif selected == 4:
                     _, msgs = update(state); stdscr.clear(); stdscr.addstr(0,0,"Обновление",curses.A_BOLD); [stdscr.addstr(i+2,2,m[:max(1,curses.COLS-4)]) for i,m in enumerate(msgs)]; pause("Нажмите любую клавишу")
-                elif selected in (5, 6):
-                    stdscr.clear(); stdscr.addstr(0,0,"Выбор профиля" if selected == 4 else "Удаление профиля",curses.A_BOLD); [stdscr.addstr(i+2,2,f"{p['id']} {p['name']}") for i,p in enumerate(state['profiles'])]; profile_id = prompt("ID профиля:")
-                    if any(p["id"] == profile_id for p in state["profiles"]):
-                        if selected == 5: state["active_profile"] = profile_id; save_state(state); pause("Профиль выбран.")
-                        else: state["profiles"] = [p for p in state["profiles"] if p["id"] != profile_id]; state["active_profile"] = None if state.get("active_profile") == profile_id else state.get("active_profile"); save_state(state); pause("Профиль удалён.")
-                    else: pause("Профиль не найден.")
+                elif selected == 5:
+                    choose_profile("Выбор и активация VPN-профиля", activate=True)
+                elif selected == 6:
+                    choose_profile("Удаление профиля", remove=True)
                 elif selected == 7: return
     curses.wrapper(ui); return 0
 
