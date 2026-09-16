@@ -65,3 +65,40 @@ The current implementation does not yet convert Xray multiplex, KCP, QUIC, HTTP/
 State is stored in `~/.config/cpn/state.json`; override locations with `CPN_CONFIG_DIR` and `CPN_DATA_DIR` for tests. Subscription responses may be JSON, line-based, or Base64-encoded links. Only HTTPS subscription URLs without embedded credentials are accepted. Downloaded profile content is parsed, never executed as code.
 
 VPN files are written to `/etc/cpn/sing-box.json` and `/etc/cpn/ssh-route.json`; the service unit is `/etc/systemd/system/cpn-sing-box.service`.
+
+## Prime Agent / harness
+
+The full-tunnel policy is compatible with Prime Agent: HTTPS traffic to its installer, control plane, model provider, and Groq API is routed through the selected VPN profile. SSH bypass remains limited to TCP/22, so it does not interfere with Prime Agent's HTTPS traffic.
+
+Install Prime Agent separately after activating the VPN, using its published installer:
+
+```bash
+curl --proto '=https' --proto-redir '=https' -fsSL https://app.primeintellect.ai/prime-agent/install.sh | sh
+command -v prime-agent
+prime-agent --help
+```
+
+Configure Groq without putting the key in this repository, the `cpn` state file, or a command-line argument:
+
+```bash
+read -rsp 'GROQ API key: ' GROQ_API_KEY
+echo
+export GROQ_API_KEY
+```
+
+List models currently available to that key:
+
+```bash
+curl -fsS https://api.groq.com/openai/v1/models \
+  -H "Authorization: Bearer $GROQ_API_KEY" \
+  -H 'Content-Type: application/json' \
+  | python3 -c 'import json,sys; print("\\n".join(x["id"] for x in json.load(sys.stdin).get("data", [])))'
+```
+
+Use an ID returned by the API; Groq availability changes over time. For example, when present in the returned catalog:
+
+```bash
+prime-agent --provider groq --model 'openai/gpt-oss-20b'
+```
+
+Never put the key in a command-line argument or commit it. If Groq reports `401 Invalid API Key`, revoke the exposed key in Groq Console and create a replacement. If a model or quota error appears, choose another ID from the current `/models` response.
