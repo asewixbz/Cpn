@@ -48,7 +48,7 @@ class CpnTests(unittest.TestCase):
             self.assertTrue(cpn.ssh_session())
         self.assertFalse(cpn.safety_status()["network_mutations"])
         self.assertEqual(cpn.safety_status()["vpn_activation"], "explicit --activate only")
-        self.assertEqual(cpn.safety_status()["route_changes"], "SSH route pinned")
+        self.assertEqual(cpn.safety_status()["route_changes"], "SSH route pinned + policy route")
 
     def test_safety_command(self):
         proc = subprocess.run([sys.executable, "cpn.py", "safety"], cwd=Path(__file__).parent, capture_output=True, text=True)
@@ -70,6 +70,14 @@ class CpnTests(unittest.TestCase):
             run.side_effect = [type("R", (), {"stdout": ""})(), type("R", (), {"stdout": "2001:db8::25 via 2001:db8::1 dev eth0 src 2001:db8::2"})()]
             route = cpn._ssh_route()
         self.assertEqual(route["prefix"], "2001:db8::25/128")
+
+    def test_ssh_bypass_installs_marking_rules(self):
+        with TemporaryDirectory() as directory, patch.object(cpn, "VPN_DIR", Path(directory)), patch.object(cpn, "SSH_NFT_FILE", Path(directory) / "ssh-bypass.nft"), patch.object(cpn.shutil, "which", return_value="/usr/sbin/nft"), patch.object(cpn, "_run") as run:
+            cpn._install_ssh_bypass({"peer": "198.51.100.5", "prefix": "198.51.100.5/32", "via": "198.51.100.1", "dev": "eth0"})
+            rules = (Path(directory) / "ssh-bypass.nft").read_text()
+        self.assertIn("tcp dport 22 ct mark set 0x1", rules)
+        self.assertIn("ct mark 0x1 meta mark set ct mark", rules)
+        self.assertTrue(any("ip" in call.args[0] and "fwmark" in call.args[0] for call in run.call_args_list))
 
     def test_xray_json_profile_conversion(self):
         xray = {"outbounds": [{"protocol": "vless", "settings": {"vnext": [{"address": "edge.example", "port": 443, "users": [{"id": "00000000-0000-0000-0000-000000000000", "encryption": "none"}]}]}, "streamSettings": {"network": "ws", "security": "tls", "tlsSettings": {"serverName": "edge.example"}, "wsSettings": {"path": "/api"}}}]}

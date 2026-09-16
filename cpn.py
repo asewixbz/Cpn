@@ -33,6 +33,11 @@ VPN_DIR = Path("/etc/cpn")
 VPN_CONFIG = VPN_DIR / "sing-box.json"
 VPN_ROUTE_BACKUP = VPN_DIR / "ssh-route.json"
 VPN_SERVICE = "cpn-sing-box.service"
+SSH_POLICY_TABLE = "cpn_ssh"
+SSH_POLICY_MARK = "0x1"
+SSH_POLICY_PREF = "100"
+SSH_NFT_TABLE = "cpn_ssh"
+SSH_NFT_FILE = VPN_DIR / "ssh-bypass.nft"
 
 
 class CpnError(Exception):
@@ -45,7 +50,7 @@ def ssh_session() -> bool:
 
 
 def safety_status() -> dict[str, Any]:
-    return {"ssh_session": ssh_session(), "network_mutations": NETWORK_MUTATIONS_ENABLED, "vpn_activation": "explicit --activate only", "route_changes": "SSH route pinned", "firewall_changes": False, "dns_changes": "sing-box scoped", "profile_execution": False}
+    return {"ssh_session": ssh_session(), "network_mutations": NETWORK_MUTATIONS_ENABLED, "vpn_activation": "explicit --activate only", "route_changes": "SSH route pinned + policy route", "firewall_changes": "nftables SSH mark only", "dns_changes": "sing-box scoped", "profile_execution": False}
 
 
 def _require_root() -> None:
@@ -97,7 +102,40 @@ def _ssh_route_is_pinned(route: dict[str, Any] | None) -> bool:
     return "dev" in lookup and lookup[lookup.index("dev") + 1] == route["dev"]
 
 
+def _install_ssh_bypass(route: dict[str, Any] | None) -> None:
+    """Keep new and existing TCP/22 flows on the original uplink."""
+    if not route: return
+    nft = shutil.which("nft")
+    if not nft: raise CpnError("Не найден nft. Установите пакет nftables перед активацией VPN.")
+    gateway = route.get("via")
+    route_cmd = ["ip", "route", "replace", "default"]
+    if gateway: route_cmd += ["via", gateway]
+    route_cmd += ["dev", route["dev"], "table", SSH_POLICY_TABLE]
+    _run(route_cmd)
+    _run(["ip", "rule", "add", "pref", SSH_POLICY_PREF, "fwmark", SSH_POLICY_MARK, "lookup", SSH_POLICY_TABLE], check=False)
+    VPN_DIR.mkdir(parents=True, exist_ok=True)
+    SSH_NFT_FILE.write_text(
+        f"table inet {SSH_NFT_TABLE} {{\n"
+        " chain prerouting { type filter hook prerouting priority mangle; policy accept;\n"
+        "  tcp dport 22 ct mark set 0x1\n"
+        " }\n"
+        " chain output { type filter hook output priority mangle; policy accept;\n"
+        "  ct mark 0x1 meta mark set ct mark\n"
+        " }\n"
+        "}\n", encoding="utf-8")
+    _run([nft, "-f", str(SSH_NFT_FILE)])
+
+
+def _restore_ssh_bypass() -> None:
+    nft = shutil.which("nft")
+    if nft: _run([nft, "delete", "table", "inet", SSH_NFT_TABLE], check=False)
+    _run(["ip", "rule", "del", "pref", SSH_POLICY_PREF, "fwmark", SSH_POLICY_MARK, "lookup", SSH_POLICY_TABLE], check=False)
+    _run(["ip", "route", "flush", "table", SSH_POLICY_TABLE], check=False)
+    SSH_NFT_FILE.unlink(missing_ok=True)
+
+
 def _restore_ssh_route() -> None:
+    _restore_ssh_bypass()
     if not VPN_ROUTE_BACKUP.exists(): return
     route = json.loads(VPN_ROUTE_BACKUP.read_text(encoding="utf-8")); peer = route["peer"]
     _run(["ip", "route", "del", route.get("prefix", f"{peer}/32")], check=False)
@@ -202,10 +240,10 @@ def activate_profile(profile: dict[str, Any]) -> None:
     route = _ssh_route(); config = _singbox_config(profile)
     VPN_DIR.mkdir(parents=True, exist_ok=True); VPN_CONFIG.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     _run([sing_box, "check", "-c", str(VPN_CONFIG)])
-    _preserve_ssh_route(route)
     unit = f"[Unit]\nDescription=cpn sing-box VPN\nAfter=network-online.target\nWants=network-online.target\n[Service]\nType=simple\nExecStart={sing_box} run -c {VPN_CONFIG}\nExecStopPost=/usr/local/bin/cpn deactivate-route\nRestart=on-failure\nRestartSec=3\n[Install]\nWantedBy=multi-user.target\n"
     Path("/etc/systemd/system/cpn-sing-box.service").write_text(unit, encoding="utf-8")
     try:
+        _preserve_ssh_route(route); _install_ssh_bypass(route)
         _run(["systemctl", "daemon-reload"]); _run(["systemctl", "enable", "--now", VPN_SERVICE]); time.sleep(2)
         active = _run(["systemctl", "is-active", VPN_SERVICE], check=False).stdout.strip()
         if active != "active": raise CpnError("sing-box не перешёл в active; выполнен откат SSH-маршрута.")
@@ -348,8 +386,8 @@ def print_safety() -> None:
     s = safety_status()
     print(f"SSH-сессия: {'да' if s['ssh_session'] else 'нет'}")
     print("Активация VPN: только через явный --activate")
-    print("SSH-маршрут: закрепляется перед запуском")
-    print("Изменение firewall: не выполняется")
+    print("SSH-маршрут: закрепляется + policy route")
+    print("nftables: только bypass TCP/22")
     print("DNS: внутри sing-box")
     print("Исполнение профилей: запрещено")
 

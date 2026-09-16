@@ -16,6 +16,13 @@ command -v sing-box
 sing-box version
 ```
 
+For SSH bypass and policy routing, install nftables and iproute2:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y nftables iproute2
+```
+
 Do not install a random binary from an untrusted subscription server.
 
 ## Commands
@@ -36,9 +43,9 @@ sudo cpn deactivate         Stop VPN and restore the SSH route
 
 ## VPS / SSH safety model
 
-Plain `cpn select PROFILE_ID` is non-mutating. In the TUI, choose **«Выбрать профиль»**, move with ↑/↓, and press Enter: the highlighted profile is saved and activated directly. Run the TUI as `sudo cpn` because activation requires root. Before starting sing-box, cpn resolves the SSH peer route and saves it. It installs a host route for that exact SSH client IP on the original interface, so the current SSH connection is excluded from the VPN default route. This is stronger than excluding only TCP port 22: an established SSH flow is identified by the client IP and can use an ephemeral source port, and a port-only rule does not protect return routing. The VPN uses a TUN inbound with `auto_route` and a private-address direct rule; DNS is handled inside sing-box. No firewall rules are changed.
+Plain `cpn select PROFILE_ID` is non-mutating. In the TUI, choose **«Выбрать профиль»**, move with ↑/↓, and press Enter: the highlighted profile is saved and activated directly. Run the TUI as `sudo cpn` because activation requires root. Before starting sing-box, cpn resolves the SSH peer route and saves it. It installs a host route for that exact SSH client IP on the original interface, plus an nftables connection mark and policy route for **all TCP port-22 traffic**. This protects both the current SSH connection and new SSH connections from other IP addresses. The host route is stronger than excluding only port 22 for the current session because an established SSH flow can use an ephemeral source port, while the nftables rule covers the new-connection case. The VPN uses a TUN inbound with `auto_route` and a private-address direct rule; DNS is handled inside sing-box.
 
-Activation is fail-closed: root is required; `sing-box check` must pass; the systemd service must become active; and the SSH peer route must still resolve to the original interface after TUN startup. Otherwise cpn disables the service and restores the saved SSH route. Use `sudo cpn deactivate` to stop the service and restore the route. The first activation should be performed from a second SSH session or with VPS console access available because no software can guarantee connectivity against provider-level faults, invalid profiles, or an incorrectly packaged sing-box build.
+Activation is fail-closed: root is required; `sing-box check` must pass; `nft` must be installed; the systemd service must become active; and the SSH peer route must still resolve to the original interface after TUN startup. Otherwise cpn disables the service and restores the saved SSH route, nftables table, policy rule, and policy route. Use `sudo cpn deactivate` to stop the service and restore the route. The first activation should be performed from a second SSH session or with VPS console access available because no software can guarantee connectivity against provider-level faults, invalid profiles, or an incorrectly packaged sing-box build.
 
 ## JSON subscription support
 
